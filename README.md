@@ -4,6 +4,8 @@ Proof-Refactor is an agentic proof refactoring framework for Lean 4.
 
 Paper: [arXiv:2606.03743](https://arxiv.org/abs/2606.03743)
 
+Website: [https://pelicanhere.github.io/proof-refactor-site/](https://pelicanhere.github.io/proof-refactor-site/)
+
 Docs: [Usage](USAGE.md) · [Config](config/README.md) · [Lean workspace](Lean/README.md) · [Evaluation](evaluation/README.md)
 
 ## Pipeline
