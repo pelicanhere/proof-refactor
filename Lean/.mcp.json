@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "lean-lsp": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "--from",
+        "../lean-lsp-mcp",
+        "lean-lsp-mcp"
+      ],
+      "env": {
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONUTF8": "1",
+        "LEAN_PROJECT_PATH": "."
+      }
+    }
+  }
+}

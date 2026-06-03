@@ -1,0 +1,4 @@
+[submodule "lean-lsp-mcp"]
+	path = lean-lsp-mcp
+	url = https://github.com/pelicanhere/lean-lsp-mcp-proof-refactor.git
+	branch = main

@@ -1,0 +1,13 @@
+# Checkout-local batch overlay.
+# Workspace and prompt values are inherited from config/default.yaml.
+batch:
+  concurrency: 1
+  heartbeat_seconds: 60
+  output_root: output/phase
+  defaults:
+    max_rounds: 200
+    check_after_complete: true
+    allow_sorry: false
+  inputs:
+    - dataset/repeat_test.lean
+  tasks: []

@@ -1,0 +1,35 @@
+[project]
+name = "proof-refactor"
+version = "0.3.0"
+description = "Proof Refactoring Tools for Lean"
+requires-python = ">=3.10"
+dependencies = [
+    "fire",
+    "httpx[socks]",
+    "pyyaml",
+    "openai",
+    "requests",
+    "python-dotenv>=1.2.2",
+]
+
+[project.scripts]
+proof-refactor = "proof_refactor.cli:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+proof_refactor = [
+    "prompts/*.md",
+    "prompts/*/*.md",
+]
+
+[tool.uv]
+link-mode = "copy"
