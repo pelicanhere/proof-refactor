@@ -7,12 +7,13 @@ workspace.
 
 ```text
 Lean/
+├── .github/workflows/     # Lean CI workflow
 ├── .mcp.json              # Claude MCP config for the local lean-lsp-mcp submodule
 ├── lakefile.toml
+├── lake-manifest.json     # pinned Lake dependency manifest
 ├── lean-toolchain
 ├── Extraction.lean        # extraction tactic module entry
 ├── Extraction/            # tactic implementation and guard-message tests
-├── benchmarks/            # original / baseline / refactor examples
 ├── dataset/               # input files for proof-refactor
 └── output/                # generated output, gitignored
 ```
