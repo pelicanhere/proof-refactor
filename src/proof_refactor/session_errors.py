@@ -1,5 +1,5 @@
 """
-Error extraction from Claude stream-json session logs.
+Error extraction from Claude stream-json or Codex JSONL session logs.
 
 Auto-called by mcp_stats.analyze_session_logs() after every session.
 Saves errors.json alongside stats.json in the session log directory.
@@ -63,6 +63,25 @@ def extract_errors_from_log(log_path: str | Path) -> dict:
             continue
 
         t = evt.get("type", "")
+
+        if t == "item.completed":
+            item = evt.get("item", {})
+            if isinstance(item, dict) and item.get("type") == "mcp_tool_call":
+                if item.get("error") or item.get("status") == "failed":
+                    tool_errors.append({
+                        "tool_name": str(item.get("tool", "mcp_tool_call")),
+                        "error_text": str(item.get("error", item.get("result", ""))),
+                        "tool_use_id": item.get("id", ""),
+                    })
+            elif isinstance(item, dict) and item.get("type") == "command_execution":
+                exit_code = item.get("exit_code")
+                if exit_code not in (0, None) or item.get("status") == "failed":
+                    tool_errors.append({
+                        "tool_name": "command_execution",
+                        "error_text": str(item.get("aggregated_output", "")),
+                        "tool_use_id": item.get("id", ""),
+                    })
+            continue
 
         if t == "assistant":
             # Track tool_use blocks so we can resolve names for tool_result errors

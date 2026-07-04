@@ -1,5 +1,5 @@
 """
-Tool statistics derived only from Claude stream-json session logs.
+Tool statistics derived from Claude stream-json or Codex JSONL session logs.
 
 Auto-called by runner.run_task() after every session.
 Also runnable as a debug-only module entry:
@@ -67,8 +67,10 @@ _BASH_VERIFY_PATTERNS = (
 )
 
 
-def compute_cost(token_usage: dict, model: str | None = None) -> float:
+def compute_cost(token_usage: dict, model: str | None = None) -> float | None:
     """Estimate USD cost from token counts using per-model pricing."""
+    if model == "codex":
+        return None
     rates = _COST_PER_MTok.get(model or _DEFAULT_MODEL, _COST_PER_MTok[_DEFAULT_MODEL])
     return (
         token_usage.get("input_tokens", 0) / 1_000_000 * rates["input"]
@@ -102,6 +104,27 @@ def _new_counter() -> dict[str, int]:
     return {"total": 0, "ok": 0, "fail": 0}
 
 
+def _empty_token_usage() -> dict[str, int]:
+    return {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+    }
+
+
+def _add_usage(dst: dict[str, int], usage: dict) -> None:
+    """Merge Claude or Codex token usage shapes into the common token fields."""
+    dst["input_tokens"] += int(usage.get("input_tokens", 0) or 0)
+    dst["output_tokens"] += int(usage.get("output_tokens", 0) or 0)
+    dst["cache_read_input_tokens"] += int(
+        usage.get("cache_read_input_tokens", usage.get("cached_input_tokens", 0)) or 0
+    )
+    dst["cache_creation_input_tokens"] += int(usage.get("cache_creation_input_tokens", 0) or 0)
+    dst["reasoning_output_tokens"] += int(usage.get("reasoning_output_tokens", 0) or 0)
+
+
 def _bump(bucket: dict[str, dict[str, int]], tool_name: str, status: str = "ok"):
     stats = bucket.setdefault(tool_name, _new_counter())
     stats["total"] += 1
@@ -116,7 +139,7 @@ def _is_bash_verification(command_or_description: str) -> bool:
 
 def analyze_stream_json_log(log_path: str | Path) -> dict:
     """
-    Parse a single stream-json round_N.txt log file.
+    Parse a single Claude stream-json or Codex JSONL round_N.txt log file.
 
     Counts:
     - top-level Claude tool calls from assistant tool_use blocks
@@ -128,12 +151,7 @@ def analyze_stream_json_log(log_path: str | Path) -> dict:
     claude_tools: dict[str, dict[str, int]] = {}
     mcp_tools: dict[str, dict[str, int]] = {}
     subagent_types: dict[str, int] = defaultdict(int)
-    token_usage = {
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "cache_read_input_tokens": 0,
-        "cache_creation_input_tokens": 0,
-    }
+    token_usage = _empty_token_usage()
     pending_top_level: dict[str, tuple[str, str]] = {}
     model: str | None = None
     bash_verification_calls = 0
@@ -163,8 +181,39 @@ def analyze_stream_json_log(log_path: str | Path) -> dict:
         evt_type = evt.get("type", "")
         parent_tool_use_id = evt.get("parent_tool_use_id")
 
+        if evt_type == "thread.started" and model is None:
+            model = "codex"
+            continue
+
         if evt_type == "system" and evt.get("subtype") == "init" and model is None:
             model = _normalize_model(evt.get("model"))
+            continue
+
+        if evt_type == "turn.completed":
+            usage = evt.get("usage", {})
+            if isinstance(usage, dict):
+                _add_usage(token_usage, usage)
+            continue
+
+        if evt_type == "item.completed":
+            item = evt.get("item", {})
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("type")
+            if item_type == "mcp_tool_call":
+                raw_name = item.get("tool", "unknown")
+                norm_name = _normalize_tool_name(str(raw_name))
+                status = "fail" if item.get("error") or item.get("status") == "failed" else "ok"
+                _bump(mcp_tools, norm_name, status=status)
+            elif item_type == "command_execution":
+                exit_code = item.get("exit_code")
+                status = "ok" if exit_code in (0, None) and item.get("status") != "failed" else "fail"
+                _bump(claude_tools, "command_execution", status=status)
+                command = item.get("command", "")
+                if isinstance(command, str) and _is_bash_verification(command):
+                    bash_verification_calls += 1
+            elif item_type and item_type != "agent_message":
+                _bump(claude_tools, str(item_type), status="ok")
             continue
 
         if evt_type == "assistant":
@@ -173,8 +222,8 @@ def analyze_stream_json_log(log_path: str | Path) -> dict:
                 model = _normalize_model(msg.get("model"))
 
             usage = msg.get("usage", {})
-            for key in token_usage:
-                token_usage[key] += usage.get(key, 0)
+            if isinstance(usage, dict):
+                _add_usage(token_usage, usage)
 
             # Worker-internal tool uses are accounted for by task_progress events.
             if parent_tool_use_id is not None:
@@ -272,12 +321,7 @@ def analyze_session_logs(
 
     total_claude_tools: dict[str, dict[str, int]] = {}
     total_mcp_tools: dict[str, dict[str, int]] = {}
-    total_tokens = {
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "cache_read_input_tokens": 0,
-        "cache_creation_input_tokens": 0,
-    }
+    total_tokens = _empty_token_usage()
     total_subagent_types: dict[str, int] = defaultdict(int)
     total_bash_verification_calls = 0
     per_round = []
@@ -401,7 +445,7 @@ def _print_stats(summary: dict, label: str = ""):
         return
 
     print()
-    _print_tool_table(claude_tools, "Tool (Claude)")
+    _print_tool_table(claude_tools, "Tool (Agent)")
     _print_tool_table(mcp_tools, "Tool (Lean MCP)")
 
     if subagent_types:
@@ -414,10 +458,13 @@ def _print_stats(summary: dict, label: str = ""):
         out = tokens.get("output_tokens", 0)
         cache_read = tokens.get("cache_read_input_tokens", 0)
         cache_creation = tokens.get("cache_creation_input_tokens", 0)
+        reasoning = tokens.get("reasoning_output_tokens", 0)
         cost_str = f"  |  cost=${cost_usd:.4f}" if cost_usd is not None else ""
+        reasoning_str = f"  reasoning={reasoning:,}" if reasoning else ""
         print(
             f"\n  Tokens  input={inp:,}  output={out:,}  "
-            f"cache_read={cache_read:,}  cache_creation={cache_creation:,}{cost_str}"
+            f"cache_read={cache_read:,}  cache_creation={cache_creation:,}"
+            f"{reasoning_str}{cost_str}"
         )
         if model and model != _DEFAULT_MODEL:
             print(f"  Model   {model}")
