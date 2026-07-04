@@ -101,6 +101,7 @@ class ProofRunner:
         variant: str = "",
         workspace: str = "",
         prompts_dir: str = "",
+        agent: str = "codex",
     ) -> None:
         """Refactor a single Lean proof in the configured workspace."""
         cfg = _load_config(workspace, prompts_dir)
@@ -123,6 +124,7 @@ class ProofRunner:
             source_path=source_path,
             phase_prompts=build_phase_prompts(fmt_kwargs["prompt_dir"], fmt_kwargs),
             cwd=cfg.paths.workspace_dir,
+            agent=agent,
             session_logs_dir=cfg.paths.session_logs_dir,
             max_rounds=max_rounds,
             check_after_complete=True,
@@ -142,6 +144,7 @@ class ProofRunner:
         variant: str = "",
         workspace: str = "",
         prompts_dir: str = "",
+        agent: str = "codex",
     ) -> None:
         """Re-run one phase against an existing run directory."""
         cfg = _load_config(workspace, prompts_dir)
@@ -183,6 +186,7 @@ class ProofRunner:
             phase_name=phase_name,
             prompt=prompt,
             cwd=cfg.paths.workspace_dir,
+            agent=agent,
             session_logs_dir=cfg.paths.session_logs_dir,
             max_rounds=max_rounds,
             check_after_complete=True,
@@ -203,6 +207,7 @@ class ProofRunner:
         input: list[str] | None = None,
         workspace: str = "",
         prompts_dir: str = "",
+        agent: str = "",
     ) -> None:
         """Run the phase-mode batch config. Defaults to the `batch` overlay."""
         from .batch_run import run_from_config
@@ -213,6 +218,7 @@ class ProofRunner:
             dry_run=dry_run,
             concurrency=concurrency,
             inputs=inputs,
+            agent=agent,
             workspace=workspace,
             prompts_dir=prompts_dir,
         ))

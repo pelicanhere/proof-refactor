@@ -5,6 +5,7 @@ batch:
   heartbeat_seconds: 60
   output_root: output/phase
   defaults:
+    agent: codex
     max_rounds: 200
     check_after_complete: true
     allow_sorry: false

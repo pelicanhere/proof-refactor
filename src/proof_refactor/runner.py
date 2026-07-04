@@ -1,5 +1,5 @@
 """
-Task management layer for executing Claude on Lean tasks.
+Task management layer for executing an agent on Lean tasks.
 
 Subprocess / session logic lives in proof_refactor.run_claude.
 """
@@ -77,15 +77,17 @@ def run_phase(
     session_log_dir: Path,
     on_complete: Optional[Callable[[], bool | str]] = None,
 ) -> tuple:
-    """Run one phase as a fresh claude session. Returns (end_reason, rounds_used, round_results)."""
+    """Run one phase as a fresh agent session. Returns (end_reason, rounds_used, round_results)."""
     _log(f"\n{'=' * 60}")
     _log(f"[phase] {phase.upper()}")
+    _log(f"[agent] {task.agent}")
     _log("=" * 60)
 
     end_reason, rounds_used, round_results = run_claude_session(
         prompt=prompt,
         cwd=task.cwd,
         output_format=task.output_format,
+        agent=task.agent,
         max_rounds=task.max_rounds,
         env=env,
         on_complete=on_complete,
@@ -252,12 +254,14 @@ def _run_single(
 
     result_dir_path = Path(task.result_dir) if task.result_dir else None
     _log(f"[info] Session logs → {session_log_root}/round_N.txt")
+    _log(f"[agent] {task.agent}")
 
     with windows_keepawake():
         end_reason, rounds_used, round_results = run_claude_session(
             prompt=prompt,
             cwd=task.cwd,
             output_format=task.output_format,
+            agent=task.agent,
             max_rounds=task.max_rounds,
             env=env,
             on_complete=on_complete_callback if task.check_after_complete else None,
