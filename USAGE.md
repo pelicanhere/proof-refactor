@@ -12,7 +12,8 @@ Required tools:
 | Git | `git --version` |
 | Lean/elan | `lean --version` |
 | uv | `uv --version` |
-| Claude Code | `claude -p "reply OK"` |
+| Codex CLI | `codex exec "reply OK"` |
+| Claude Code (optional legacy backend) | `claude -p "reply OK"` |
 
 Initialize the customized MCP submodule:
 
@@ -42,10 +43,23 @@ lake build
 cd ..
 ```
 
+## Agent Backend
+
+Proof-Refactor uses Codex CLI by default. Authentication is handled by `codex`
+itself:
+
+```bash
+codex login
+codex exec "reply OK"
+```
+
+Use `--agent claude` on `run`, `phase`, or `batch` to use the legacy Claude
+Code backend. Claude Code authentication is handled by the `claude` CLI.
+
 ## Environment
 
-Claude Code authentication is handled by the `claude` CLI. The `.env` file is
-for `proof-refactor ask`, which calls an OpenAI-compatible helper endpoint.
+The `.env` file is for `proof-refactor ask`, which calls an
+OpenAI-compatible helper endpoint.
 
 Manual `.env` setup:
 
@@ -69,8 +83,8 @@ LEAN_REPL=true
 | `MODEL` | no | helper model name |
 | `LEAN_REPL` | no | enables the MCP Lean REPL fast path when supported |
 
-`AUTH_ERROR` from `proof-refactor run` usually means Claude Code authentication
-or proxy configuration is broken, not `.env`.
+`AUTH_ERROR` from `proof-refactor run` usually means Codex or legacy Claude
+authentication/proxy configuration is broken, not `.env`.
 
 ## MCP
 
@@ -84,6 +98,10 @@ or proxy configuration is broken, not `.env`.
 ]
 ```
 
+For Codex runs, the Python runner translates this workspace `.mcp.json` into
+Codex `mcp_servers` overrides for each subprocess. Legacy Claude Code can still
+read the same file directly.
+
 Use `--with-editable` only while actively developing `lean-lsp-mcp`. The
 default non-editable local install is better for normal runs.
 
@@ -95,6 +113,7 @@ Single file:
 uv run proof-refactor run dataset/repeat_test.lean
 uv run proof-refactor run dataset/repeat_test.lean --max_rounds 40
 uv run proof-refactor run dataset/repeat_test.lean --variant plan
+uv run proof-refactor run dataset/repeat_test.lean --agent claude
 ```
 
 Re-run one phase:
@@ -104,6 +123,7 @@ uv run proof-refactor phase extract repeat_test
 uv run proof-refactor phase design repeat_test
 uv run proof-refactor phase prove repeat_test
 uv run proof-refactor phase repair repeat_test
+uv run proof-refactor phase repair repeat_test --agent claude
 ```
 
 Batch:
@@ -113,6 +133,7 @@ uv run proof-refactor batch
 uv run proof-refactor batch config/batch.yaml
 uv run proof-refactor batch config/batch.yaml --dry_run
 uv run proof-refactor batch config/batch.yaml --concurrency 2
+uv run proof-refactor batch config/batch.yaml --agent claude
 ```
 
 Utility commands:
@@ -164,7 +185,8 @@ Important batch settings:
 | `batch.concurrency` | number of files to process concurrently |
 | `batch.inputs` | files or directories to discover |
 | `batch.tasks` | explicit task list with per-task overrides |
-| `batch.defaults.max_rounds` | default Claude round limit |
+| `batch.defaults.agent` | agent backend: `codex` (default) or `claude` |
+| `batch.defaults.max_rounds` | default agent round limit |
 | `batch.defaults.check_after_complete` | final Lean verification for batch tasks |
 
 `check_after_complete` is currently batch-only. Single-file `run` and
@@ -250,15 +272,16 @@ uv run python evaluation/batch_score.py \
 
 `AUTH_ERROR` before any Lean/MCP work:
 
-- Test `claude -p "reply OK"`.
-- Check Claude login/API key.
-- Disable or fix proxy settings if Claude returns authentication failures.
+- Test `codex exec "reply OK"`.
+- Check Codex login/API key.
+- If running with `--agent claude`, test `claude -p "reply OK"` and check Claude login/API key.
+- Disable or fix proxy settings if the selected agent returns authentication failures.
 
 `lean_extract` is missing:
 
 - Run `git submodule update --init --recursive`.
 - Check `Lean/.mcp.json` uses `--from ../lean-lsp-mcp`.
-- Restart Claude Code so it reloads MCP config.
+- Restart the selected agent CLI so it reloads MCP config.
 
 Lean build failures:
 

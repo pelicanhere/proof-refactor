@@ -44,6 +44,9 @@ Smoke demo:
 uv run proof-refactor run dataset/repeat_test.lean
 ```
 
+The runner uses Codex CLI by default. Use `--agent claude` on `run`, `phase`,
+or `batch` to use the legacy Claude Code backend.
+
 The default `light` prompt variant is the no-plan mode used in the paper. The
 optional `plan` variant keeps a separate `refactor_plan.md`, which may help on
 longer Lean files but uses substantially more tokens.
@@ -58,8 +61,9 @@ Lean/output/phase/repeat_test[_n]/
 See [USAGE.md](USAGE.md) for the full setup checklist, phase reruns, batch runs,
 and output layout details.
 
-Proof-Refactor invokes Claude Code with `--permission-mode bypassPermissions`
-by default. Run it only in a trusted workspace.
+Proof-Refactor invokes Codex with bypassed approvals/sandbox by default, matching
+the previous Claude Code `bypassPermissions` behavior. Run it only in a trusted
+workspace.
 
 ## Repository Layout
 

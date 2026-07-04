@@ -1,6 +1,6 @@
 # Extract Phase (light)
 
-You are the **extract phase** for task `{theorem_name}`. This is the first of four phases driven by the Python runner. You are a standalone Claude session; Read `{prompt_dir}/common.md` once, then run the workflow below.
+You are the **extract phase** for task `{theorem_name}`. This is the first of four phases driven by the Python runner. You are a standalone agent session; Read `{prompt_dir}/common.md` once, then run the workflow below.
 
 This is the no-plan variant. There is no `refactor_plan.md`. The work file plus the run-dir extract output are the only artifacts.
 
