@@ -10,10 +10,12 @@ import os
 
 from .config import load_project_dotenv
 
+AgentName = Literal["codex", "claude"]
+
 
 @dataclass
 class TaskMetadata:
-    """Task metadata for Claude Lean proving tasks."""
+    """Task metadata for agent-driven Lean proving tasks."""
 
     # Required fields
     task_type: Literal["file", "folder"]  # Task type
@@ -24,7 +26,7 @@ class TaskMetadata:
     prompt_file: Optional[str | Path] = None  # Read prompt from file
 
     # Optional fields - Execution parameters
-    cwd: Optional[str | Path] = None  # Claude working directory
+    cwd: Optional[str | Path] = None  # Agent working directory
     max_rounds: int = 20  # Maximum rounds (continue count limit)
     check_after_complete: bool = True  # Whether to check lean files after completion
     allow_sorry: bool = False  # Whether to allow sorry in lean files (default: False)
@@ -32,7 +34,7 @@ class TaskMetadata:
     # Optional fields - Result output
     result_dir: Optional[str | Path] = None  # Result output directory (JSON files)
     session_logs_dir: Optional[str | Path] = None  # Base directory for per-task session logs
-    output_format: Optional[str] = None  # Claude output format (usually stream-json / None)
+    output_format: Optional[str] = None  # Agent output format (usually stream-json / None)
 
     # Phase prompts: if set, runner uses phased flow (extract/design/prove/repair)
     # Keys must be exactly: "extract", "design", "prove", "repair"
@@ -46,8 +48,14 @@ class TaskMetadata:
     # Auto-generated fields
     created_at: datetime = field(default_factory=datetime.now)
     task_id: str = field(default="")  # Auto-generated unique ID
+    # Kept after existing fields so older positional TaskMetadata calls remain compatible.
+    agent: AgentName = "codex"  # "codex" (default) or legacy "claude"
 
     def __post_init__(self):
+        self.agent = str(self.agent).strip().lower()  # type: ignore[assignment]
+        if self.agent not in ("codex", "claude"):
+            raise ValueError(f"Unsupported agent: {self.agent!r}. Expected 'codex' or 'claude'.")
+
         # Auto-generate task_id
         if not self.task_id:
             timestamp = self.created_at.strftime("%Y%m%d_%H%M%S")
@@ -86,6 +94,8 @@ class TaskMetadata:
         env = os.environ.copy()
         # Remove CLAUDECODE so nested `claude` subprocesses are not blocked
         env.pop("CLAUDECODE", None)
+        # Avoid leaking this Codex controller thread into nested `codex exec` runs.
+        env.pop("CODEX_THREAD_ID", None)
         return env
 
     def to_dict(self) -> dict:
@@ -97,6 +107,7 @@ class TaskMetadata:
             "prompt": self.prompt,
             "prompt_file": str(self.prompt_file) if self.prompt_file else None,
             "cwd": str(self.cwd) if self.cwd else None,
+            "agent": self.agent,
             "max_rounds": self.max_rounds,
             "check_after_complete": self.check_after_complete,
             "allow_sorry": self.allow_sorry,
@@ -111,7 +122,7 @@ class TaskMetadata:
 
 @dataclass
 class RoundResult:
-    """Result of a single Claude round."""
+    """Result of a single agent round."""
 
     round_number: int
     stdout: str

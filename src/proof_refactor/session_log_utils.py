@@ -1,5 +1,5 @@
 """
-Helpers for discovering per-round Claude session logs.
+Helpers for discovering per-round agent session logs.
 """
 
 from __future__ import annotations

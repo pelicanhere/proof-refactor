@@ -1,8 +1,8 @@
 """
-Claude subprocess interface for `claude -p` and `claude -c` sessions.
+Agent subprocess interface for Claude and Codex non-interactive sessions.
 
-This module owns only the low-level Claude process loop:
-  - run_claude_once()    execute one Claude subprocess, capture output, detect END_REASON
+This module owns only the low-level process loop:
+  - run_claude_once()    execute one agent subprocess, capture output, detect END_REASON
   - run_claude_session() run the multi-round prompt/continue loop
   - get_line_counts()    lightweight file line-count utility
 """
@@ -17,10 +17,14 @@ import time
 from pathlib import Path
 from typing import Callable, Optional, List
 
-from .task import RoundResult
+from .task import AgentName, RoundResult
 
 CompleteCallback = Callable[[], bool | str]
 CLAUDE_PERMISSION_MODE = "bypassPermissions"
+CODEX_BYPASS_ARGS = [
+    "--dangerously-bypass-approvals-and-sandbox",
+    "--skip-git-repo-check",
+]
 ROUND_SLEEP_SECONDS = 1.0
 
 
@@ -37,6 +41,9 @@ AUTH_ERROR_PATTERNS = [
     re.compile(r"api token quota has been exhausted", re.I),
     re.compile(r"authentication_failed", re.I),
     re.compile(r"\b403\b.*(?:anthropic|api|quota|authenticate|authentication)", re.I),
+    re.compile(r"\b401\b.*(?:openai|api|auth|login|authenticate|authentication)", re.I),
+    re.compile(r"\b429\b.*(?:quota|rate limit|usage)", re.I),
+    re.compile(r"(?:not logged in|login required|please log in).*(?:codex|openai)", re.I),
 ]
 
 
@@ -79,9 +86,10 @@ def _extract_searchable_text(output: str) -> str:
     """
     Extract plain text from output for END_REASON detection.
 
-    When output_format="stream-json", Claude writes JSON Lines where the agent's
-    text is nested inside assistant/result objects. We extract only those plain
-    text payloads instead of searching raw JSON lines.
+    Claude stream-json writes text inside assistant/result objects. Codex
+    --json writes final assistant text as item.completed/agent_message events.
+    We extract only those plain text payloads instead of searching raw JSON
+    lines.
 
     Assistant/result extraction avoids false negatives when END_REASON appears
     inside backticks or code fences in the final reply, and avoids searching the
@@ -107,11 +115,42 @@ def _extract_searchable_text(output: str) -> str:
                     if isinstance(result_text, str):
                         parts.append(result_text)
                     continue
+                if data.get("type") == "item.completed":
+                    item = data.get("item", {})
+                    if isinstance(item, dict) and item.get("type") == "agent_message":
+                        text = item.get("text")
+                        if isinstance(text, str):
+                            parts.append(text)
+                    continue
                 continue
             except (json.JSONDecodeError, KeyError, TypeError):
                 pass
         parts.append(stripped)
     return "\n".join(parts)
+
+
+def _extract_codex_thread_id(output: str) -> Optional[str]:
+    """Return the Codex thread_id from a JSONL round log, if present."""
+    for line in output.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("{"):
+            continue
+        try:
+            data = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict) and data.get("type") == "thread.started":
+            thread_id = data.get("thread_id")
+            if isinstance(thread_id, str) and thread_id:
+                return thread_id
+    return None
+
+
+def _normalize_agent(agent: str) -> AgentName:
+    normalized = agent.strip().lower()
+    if normalized not in ("codex", "claude"):
+        raise ValueError(f"Unsupported agent: {agent!r}. Expected 'codex' or 'claude'.")
+    return normalized  # type: ignore[return-value]
 
 
 def _detect_auth_error(output: str) -> Optional[str]:
@@ -135,29 +174,153 @@ def get_line_counts(files: List[Path]) -> dict:
     return counts
 
 
+def _claude_prompt_cmd(output_format: Optional[str]) -> list[str]:
+    cmd = ["claude", "-p"]
+    if output_format:
+        cmd += ["--output-format", output_format]
+        if output_format == "stream-json":
+            cmd += ["--verbose"]
+    cmd += ["--permission-mode", CLAUDE_PERMISSION_MODE]
+    return cmd
+
+
+def _claude_continue_cmd(output_format: Optional[str]) -> list[str]:
+    cmd = ["claude", "-c", "-p"]
+    if output_format:
+        cmd += ["--output-format", output_format]
+        if output_format == "stream-json":
+            cmd += ["--verbose"]
+    cmd += ["--permission-mode", CLAUDE_PERMISSION_MODE]
+    return cmd
+
+
+def _codex_output_args(output_format: Optional[str]) -> list[str]:
+    if not output_format:
+        return []
+    if output_format in ("stream-json", "json"):
+        return ["--json"]
+    raise ValueError(
+        f"Unsupported Codex output_format: {output_format!r}. "
+        "Use 'stream-json', 'json', or None."
+    )
+
+
+def _toml_key(value: str) -> str:
+    if re.match(r"^[A-Za-z0-9_-]+$", value):
+        return value
+    return json.dumps(value)
+
+
+def _toml_string(value: object) -> str:
+    return json.dumps(str(value))
+
+
+def _toml_array(values: object) -> str:
+    if not isinstance(values, list):
+        return "[]"
+    return "[" + ",".join(_toml_string(v) for v in values) + "]"
+
+
+def _toml_inline_table(values: object) -> str:
+    if not isinstance(values, dict):
+        return "{}"
+    items = [
+        f"{_toml_key(str(key))}={_toml_string(value)}"
+        for key, value in values.items()
+    ]
+    return "{" + ",".join(items) + "}"
+
+
+def _codex_mcp_config_args(cwd: Optional[Path]) -> list[str]:
+    """Translate a Claude-style .mcp.json in the workspace into Codex -c overrides."""
+    if not cwd:
+        return []
+    mcp_path = Path(cwd) / ".mcp.json"
+    if not mcp_path.exists():
+        return []
+
+    try:
+        payload = json.loads(mcp_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"[warn] Failed to read Codex MCP config from {mcp_path}: {exc}", file=sys.stderr)
+        return []
+
+    servers = payload.get("mcpServers", {})
+    if not isinstance(servers, dict):
+        return []
+
+    args: list[str] = []
+    for raw_name, raw_server in servers.items():
+        if not isinstance(raw_server, dict):
+            continue
+        server_type = raw_server.get("type", "stdio")
+        if server_type != "stdio":
+            continue
+        command = raw_server.get("command")
+        if not command:
+            continue
+
+        prefix = f"mcp_servers.{_toml_key(str(raw_name))}"
+        args += ["-c", f"{prefix}.command={_toml_string(command)}"]
+        if "args" in raw_server:
+            args += ["-c", f"{prefix}.args={_toml_array(raw_server.get('args'))}"]
+        if "env" in raw_server:
+            args += ["-c", f"{prefix}.env={_toml_inline_table(raw_server.get('env'))}"]
+        # Claude .mcp.json starts stdio servers from the project directory.
+        # Preserve that for Codex so relative args like ../lean-lsp-mcp resolve.
+        server_cwd = raw_server.get("cwd") or str(cwd)
+        args += ["-c", f"{prefix}.cwd={_toml_string(server_cwd)}"]
+    return args
+
+
+def _codex_prompt_cmd(output_format: Optional[str], cwd: Optional[Path]) -> list[str]:
+    cmd = ["codex", "exec"]
+    cmd += _codex_output_args(output_format)
+    cmd += CODEX_BYPASS_ARGS
+    cmd += _codex_mcp_config_args(cwd)
+    if cwd:
+        cmd += ["-C", str(cwd)]
+    cmd += ["-"]
+    return cmd
+
+
+def _codex_resume_cmd(output_format: Optional[str], thread_id: str, cwd: Optional[Path]) -> list[str]:
+    cmd = ["codex", "exec", "resume"]
+    cmd += _codex_output_args(output_format)
+    cmd += CODEX_BYPASS_ARGS
+    cmd += _codex_mcp_config_args(cwd)
+    cmd += [thread_id, "-"]
+    return cmd
+
+
 def run_claude_once(
     args: List[str],
     env: Optional[dict] = None,
     cwd: Optional[Path] = None,
     log_file: Optional[Path] = None,
+    input_text: Optional[str] = None,
 ) -> tuple[str, Optional[str], int]:
     """
-    Execute a single claude command and capture output.
+    Execute a single agent command and capture output.
 
     Stdout is redirected to `log_file` or an anonymous temporary file so the
     subprocess does not block on an unread pipe.
 
     Args:
-        args: Claude command arguments list
-        env: Environment variables for the Claude subprocess
+        args: Command arguments list
+        env: Environment variables for the agent subprocess
         cwd: Working directory
         log_file: Optional log file path.
+        input_text: Optional text written to subprocess stdin.
 
     Returns:
         (stdout, end_reason, returncode)
         end_reason: "COMPLETE" | "LIMIT" | "AUTH_ERROR" | None
     """
-    popen_kwargs: dict = {"stderr": subprocess.STDOUT}
+    popen_kwargs: dict = {
+        "stderr": subprocess.STDOUT,
+        "stdin": subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
+    }
     if env:
         popen_kwargs["env"] = env
     if cwd:
@@ -168,12 +331,18 @@ def run_claude_once(
     if log_file:
         with open(log_file, "wb") as fh:
             proc = subprocess.Popen(args, stdout=fh, **popen_kwargs)
-            proc.wait()
+            if input_text is not None:
+                proc.communicate(input_text.encode("utf-8"))
+            else:
+                proc.wait()
         out = log_file.read_text(encoding="utf-8", errors="replace")
     else:
         with tempfile.TemporaryFile(mode="wb") as fh:
             proc = subprocess.Popen(args, stdout=fh, **popen_kwargs)
-            proc.wait()
+            if input_text is not None:
+                proc.communicate(input_text.encode("utf-8"))
+            else:
+                proc.wait()
             fh.seek(0)
             out = fh.read().decode("utf-8", errors="replace")
 
@@ -196,18 +365,25 @@ def run_claude_session(
     task_id: Optional[str] = None,
     files_to_track: Optional[List[Path]] = None,
     session_log_dir: Optional[Path] = None,
+    agent: AgentName = "codex",
 ) -> tuple[str, int, List[RoundResult]]:
     """
-    Run a complete Claude session with automatic continue logic.
+    Run a complete agent session with automatic continue logic.
 
-    Round 1: claude -p <prompt>  (new session)
-    Round N: claude -c -p continue  (server-side context continuation)
-    After 2 consecutive LIMITs: claude -p <prompt>  (reset to fresh session)
+    Claude:
+      Round 1: claude -p <prompt>  (new session)
+      Round N: claude -c -p continue  (server-side context continuation)
+      After 2 consecutive LIMITs: claude -p <prompt>  (reset to fresh session)
+
+    Codex:
+      Round 1: codex exec -  (prompt via stdin)
+      Round N: codex exec resume <thread_id> -  (continue via stdin)
+      After 2 consecutive LIMITs: codex exec -  (reset to fresh session)
 
     Args:
         prompt: Initial prompt
         cwd: Working directory
-        output_format: Claude output format (normally "stream-json" or None)
+        output_format: Agent output format (normally "stream-json" or None)
         max_rounds: Maximum rounds
         env: Environment variables
         on_complete: Callback when COMPLETE received. Return True to accept COMPLETE,
@@ -217,22 +393,66 @@ def run_claude_session(
         task_id: Task ID for organizing result files
         files_to_track: Files to track line counts for
         session_log_dir: Directory to save per-round conversation logs (round_N.txt)
+        agent: "codex" (default) or "claude"
 
     Returns:
         (end_reason, rounds_used, round_results)
     """
-    print(f"[info] Using prompt:\n{prompt[:120]}{'...' if len(prompt) > 120 else ''}\n")
+    agent = _normalize_agent(agent)
+    codex_thread_id: Optional[str] = None
 
-    # Build base command
-    base = ["claude", "-p"]
-    if output_format:
-        base += ["--output-format", output_format]
-        if output_format == "stream-json":
-            base += ["--verbose"]
-    base += ["--permission-mode", CLAUDE_PERMISSION_MODE]
+    print(f"[info] Using prompt:\n{prompt[:120]}{'...' if len(prompt) > 120 else ''}\n")
+    print(f"[info] Agent: {agent}")
 
     round_results: List[RoundResult] = []
     initial_line_counts = get_line_counts(files_to_track) if files_to_track else {}
+
+    def run_new_session(next_prompt: str, log_file: Optional[Path]) -> tuple[str, Optional[str], int]:
+        nonlocal codex_thread_id
+        if agent == "claude":
+            return run_claude_once(
+                _claude_prompt_cmd(output_format) + [next_prompt],
+                env=env,
+                cwd=cwd,
+                log_file=log_file,
+            )
+
+        codex_thread_id = None
+        stdout, reason, returncode = run_claude_once(
+            _codex_prompt_cmd(output_format, cwd),
+            env=env,
+            cwd=cwd,
+            log_file=log_file,
+            input_text=next_prompt,
+        )
+        codex_thread_id = _extract_codex_thread_id(stdout)
+        return stdout, reason, returncode
+
+    def run_continue_session(next_prompt: str, log_file: Optional[Path]) -> tuple[str, Optional[str], int]:
+        nonlocal codex_thread_id
+        if agent == "claude":
+            return run_claude_once(
+                _claude_continue_cmd(output_format) + [next_prompt],
+                env=env,
+                cwd=cwd,
+                log_file=log_file,
+            )
+
+        if not codex_thread_id:
+            print("[warn] Codex thread_id missing; starting a fresh session instead.")
+            return run_new_session(next_prompt, log_file)
+
+        stdout, reason, returncode = run_claude_once(
+            _codex_resume_cmd(output_format, codex_thread_id, cwd),
+            env=env,
+            cwd=cwd,
+            log_file=log_file,
+            input_text=next_prompt,
+        )
+        detected_thread_id = _extract_codex_thread_id(stdout)
+        if detected_thread_id:
+            codex_thread_id = detected_thread_id
+        return stdout, reason, returncode
 
     def record_round(round_num: int, stdout: str, reason: Optional[str], returncode: int, duration: float) -> RoundResult:
         """Record a round result."""
@@ -298,7 +518,7 @@ def run_claude_session(
 
     # First call: new session
     round_start = time.time()
-    stdout, reason, returncode = run_claude_once(base + [prompt], env=env, cwd=cwd, log_file=_log_path(1))
+    stdout, reason, returncode = run_new_session(prompt, _log_path(1))
     round_duration = time.time() - round_start
     record_round(1, stdout, reason, returncode, round_duration)
 
@@ -342,12 +562,7 @@ def run_claude_session(
                     rounds += 1
 
                     round_start = time.time()
-                    stdout, reason, returncode = run_claude_once(
-                        base + [retry_prompt],
-                        env=env,
-                        cwd=cwd,
-                        log_file=_log_path(rounds),
-                    )
+                    stdout, reason, returncode = run_new_session(retry_prompt, _log_path(rounds))
                     round_duration = time.time() - round_start
                     record_round(rounds, stdout, reason, returncode, round_duration)
                     continue
@@ -372,20 +587,14 @@ def run_claude_session(
         round_start = time.time()
         if reason is None:
             print("[info] No END_REASON detected, continuing with prompt...")
-            stdout, reason, returncode = run_claude_once(base + [prompt], env=env, cwd=cwd, log_file=_log_path(rounds))
+            stdout, reason, returncode = run_new_session(prompt, _log_path(rounds))
         elif should_reset_session:
             print(f"[info] Resetting session after {consecutive_limits} consecutive LIMITs...")
-            stdout, reason, returncode = run_claude_once(base + [prompt], env=env, cwd=cwd, log_file=_log_path(rounds))
+            stdout, reason, returncode = run_new_session(prompt, _log_path(rounds))
             consecutive_limits = 0  # Reset counter after starting new session
         else:
             # Continue the same session
-            cmd = ["claude", "-c", "-p"]
-            if output_format:
-                cmd += ["--output-format", output_format]
-                if output_format == "stream-json":
-                    cmd += ["--verbose"]
-            cmd += ["--permission-mode", CLAUDE_PERMISSION_MODE]
-            stdout, reason, returncode = run_claude_once(cmd + ["continue"], env=env, cwd=cwd, log_file=_log_path(rounds))
+            stdout, reason, returncode = run_continue_session("continue", _log_path(rounds))
         round_duration = time.time() - round_start
 
         record_round(rounds, stdout, reason, returncode, round_duration)

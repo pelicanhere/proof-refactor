@@ -26,4 +26,5 @@ Thumbs.db
 .idea/
 .codex/
 **/.claude/
+**/.ask_sessions/
 

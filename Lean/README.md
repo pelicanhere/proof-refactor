@@ -8,7 +8,7 @@ workspace.
 ```text
 Lean/
 ├── .github/workflows/     # Lean CI workflow
-├── .mcp.json              # Claude MCP config for the local lean-lsp-mcp submodule
+├── .mcp.json              # Lean MCP config for the local lean-lsp-mcp submodule
 ├── lakefile.toml
 ├── lake-manifest.json     # pinned Lake dependency manifest
 ├── lean-toolchain
@@ -18,7 +18,9 @@ Lean/
 └── output/                # generated output, gitignored
 ```
 
-`Lean/.mcp.json` starts the local `lean-lsp-mcp` submodule:
+`Lean/.mcp.json` starts the local `lean-lsp-mcp` submodule. The runner passes
+this configuration to Codex subprocesses and legacy Claude Code can read the
+same file directly:
 
 ```json
 "args": ["--from", "../lean-lsp-mcp", "lean-lsp-mcp"]

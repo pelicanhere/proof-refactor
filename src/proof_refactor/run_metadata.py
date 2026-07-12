@@ -60,6 +60,7 @@ def _run_metadata_record(
         "source_path": str(task.source_path) if task.source_path else None,
         "target_path": str(task.target_path),
         "cwd": str(task.cwd) if task.cwd else None,
+        "agent": task.agent,
         "created_at": task.created_at.isoformat(),
         "phased": bool(task.phase_prompts),
         "phases": list(task.phase_prompts) if task.phase_prompts else [],

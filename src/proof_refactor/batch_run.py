@@ -254,6 +254,7 @@ def _prepare_items(
         max_rounds = int(settings.get("max_rounds", 20))
         check_after_complete = bool(settings.get("check_after_complete", True))
         allow_sorry = bool(settings.get("allow_sorry", False))
+        agent = str(settings.get("agent", "codex") or "codex")
 
         task_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         task = TaskMetadata(
@@ -263,6 +264,7 @@ def _prepare_items(
             source_path=source_path,
             phase_prompts=build_phase_prompts(fmt_kwargs["prompt_dir"], fmt_kwargs),
             cwd=app.paths.workspace_dir,
+            agent=agent,
             session_logs_dir=app.paths.session_logs_dir,
             max_rounds=max_rounds,
             check_after_complete=check_after_complete,
@@ -322,6 +324,7 @@ def _initial_entry(item: BatchItem, app) -> dict[str, Any]:
         "result_json_path": str(item.result_json_path),
         "batch_file_log_path": str(item.file_log_path),
         "runner_log_path": str(item.runner_log_path),
+        "agent": item.task.agent,
         "max_rounds": item.task.max_rounds,
     }
 
@@ -482,6 +485,7 @@ def run_from_config(
     inputs: list[str] | None = None,
     workspace: str = "",
     prompts_dir: str = "",
+    agent: str = "",
 ) -> int:
     try:
         app = get_config(config_file, workspace_dir=workspace, prompts_dir=prompts_dir)
@@ -493,6 +497,8 @@ def run_from_config(
         return 1
 
     batch = app.batch
+    if agent:
+        batch.defaults = {**batch.defaults, "agent": agent}
     sources, overrides = _discover_sources(app, cli_inputs=inputs)
     if not sources:
         print("[warn] No Lean source files found.")
@@ -642,6 +648,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("config", nargs="?", default="batch", help="Config overlay/path. Default: batch")
     parser.add_argument("-j", "--concurrency", type=int, default=None, help="Override batch.concurrency")
     parser.add_argument("--input", action="append", default=None, help="Override YAML inputs with a file/folder path")
+    parser.add_argument("--agent", default="", help="Agent backend: codex (default) or claude")
     parser.add_argument("--workspace", default="", help="Lean workspace root override")
     parser.add_argument("--prompts-dir", default="", help="External prompt root override")
     parser.add_argument("--dry-run", action="store_true", help="List resolved files and write initial metadata only")
@@ -651,6 +658,7 @@ def main(argv: list[str] | None = None) -> int:
         dry_run=args.dry_run,
         concurrency=args.concurrency,
         inputs=args.input,
+        agent=args.agent,
         workspace=args.workspace,
         prompts_dir=args.prompts_dir,
     )

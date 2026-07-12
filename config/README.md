@@ -21,7 +21,7 @@ Defined in `config/default.yaml`.
 | `prompts_dir` | No | bundled prompts | External prompt root override |
 | `output_dir` | No | `output` | Workspace-relative output root |
 | `dataset_dir` | No | `dataset` | Workspace-relative dataset root |
-| `session_logs_dir` | No | `output/session_logs` | Workspace-relative Claude/session-log root |
+| `session_logs_dir` | No | `output/session_logs` | Workspace-relative agent session-log root |
 
 The workspace must contain `lakefile.toml` or `lakefile.lean`, plus
 `lean-toolchain`.
@@ -76,7 +76,8 @@ The following fields can appear in `batch.defaults` or in an individual
 | Field | Default | Meaning |
 |-------|---------|---------|
 | `mode` | `phase` | Only `phase` is supported |
-| `max_rounds` | `20` | Claude continuation limit |
+| `agent` | `codex` | Agent backend: `codex` or legacy `claude` |
+| `max_rounds` | `20` | Agent continuation limit |
 | `check_after_complete` | `true` | Run Lean verification after `COMPLETE` |
 | `allow_sorry` | `false` | Allow `sorry` during final verification |
 | `prompts_variant` | config value | Per-task prompt variant override |
