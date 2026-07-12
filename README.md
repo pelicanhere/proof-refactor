@@ -38,14 +38,18 @@ MODEL=gemini-3.1-pro-preview
 LEAN_REPL=true
 ```
 
-Smoke demo:
+Smoke demo (Codex CLI backend):
 
 ```bash
 uv run proof-refactor run dataset/repeat_test.lean
 ```
 
-The runner uses Codex CLI by default. Use `--agent claude` on `run`, `phase`,
-or `batch` to use the legacy Claude Code backend.
+Proof-Refactor supports both Codex CLI and the legacy Claude Code runner:
+
+| Backend | How to use |
+|---|---|
+| Codex CLI | default for `run`, `phase`, and `batch`; pass `--agent codex` explicitly if needed |
+| Claude Code | pass `--agent claude` to use the legacy backend |
 
 The default `light` prompt variant is the no-plan mode used in the paper. The
 optional `plan` variant keeps a separate `refactor_plan.md`, which may help on
